@@ -1,0 +1,515 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Primitive & Schema Validation Helpers
+    // -------------------------------------------------------------------------
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidUsername(u) {
+      return u is string && u.size() >= 2 && u.size() <= 60 && u.matches('^[a-z0-9_.\\-]+$');
+    }
+
+    function isValidBcryptHash(h) {
+      return h is string && h.size() >= 55 && h.size() <= 100 && h.matches('^\\$2[aby]\\$[0-9]{2}\\$.+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidStr(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidRiskRating(val) {
+      return val in ['Critical', 'High', 'Moderate', 'Low'];
+    }
+
+    function isValidScore(val) {
+      return (val is int || val is float) && val >= 1 && val <= 5;
+    }
+
+    function isValidDomain(val) {
+      return val in [
+        'Philippine Corporate',
+        'Operations',
+        'Inventory',
+        'Finance',
+        'Compliance',
+        'Procurement',
+        'Asset Disposal',
+        'Treasury',
+        'Branch Operations',
+        'IT & Governance'
+      ];
+    }
+
+    // -------------------------------------------------------------------------
+    // Entity Validation Blueprints
+    // -------------------------------------------------------------------------
+    function isValidCustomAuthSeed(data) {
+      return data.keys().hasAll(['seeded', 'adminUserId', 'createdAt'])
+        && data.keys().hasOnly(['seeded', 'adminUserId', 'createdAt'])
+        && data.seeded == true
+        && isValidId(data.adminUserId)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidUserDoc(data) {
+      return data.keys().hasAll([
+          'userId', 'username', 'passwordHash', 'fullName',
+          'role', 'status', 'mustChangePassword', 'createdDate', 'lastLogin'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'username', 'passwordHash', 'fullName',
+          'role', 'status', 'mustChangePassword', 'createdDate', 'lastLogin'
+        ])
+        && isValidId(data.userId)
+        && isValidUsername(data.username)
+        && isValidBcryptHash(data.passwordHash)
+        && isValidStr(data.fullName, 1, 120)
+        && data.role in ['Administrator', 'Auditor', 'Viewer']
+        && data.status in ['Active', 'Disabled']
+        && data.mustChangePassword is bool
+        && data.createdDate is timestamp
+        && (data.lastLogin == null || data.lastLogin is timestamp);
+    }
+
+    function isValidRiskAssessment(ra) {
+      return ra is map
+        && ra.keys().hasAll(['likelihood', 'impact', 'controlEnvironmentScore', 'residualRiskRating', 'rationale'])
+        && ra.keys().hasOnly(['likelihood', 'impact', 'controlEnvironmentScore', 'residualRiskRating', 'rationale'])
+        && isValidScore(ra.likelihood)
+        && isValidScore(ra.impact)
+        && isValidScore(ra.controlEnvironmentScore)
+        && isValidRiskRating(ra.residualRiskRating)
+        && isValidStr(ra.rationale, 1, 3000);
+    }
+
+    function isValidRootCause(rc) {
+      return rc is map
+        && rc.keys().hasAll(['summary', 'people', 'process', 'technology', 'policyGovernance', 'externalRegulatory'])
+        && rc.keys().hasOnly(['summary', 'people', 'process', 'technology', 'policyGovernance', 'externalRegulatory'])
+        && isValidStr(rc.summary, 1, 2000)
+        && isValidStr(rc.people, 0, 1500)
+        && isValidStr(rc.process, 0, 1500)
+        && isValidStr(rc.technology, 0, 1500)
+        && isValidStr(rc.policyGovernance, 0, 1500)
+        && isValidStr(rc.externalRegulatory, 0, 1500);
+    }
+
+    function isValidReportNarratives(arn) {
+      return arn is map
+        && arn.keys().hasAll(['executiveSummary', 'scopeAndMethodology', 'overallConclusion', 'keyHighlights'])
+        && arn.keys().hasOnly(['executiveSummary', 'scopeAndMethodology', 'overallConclusion', 'keyHighlights'])
+        && isValidStr(arn.executiveSummary, 1, 4000)
+        && isValidStr(arn.scopeAndMethodology, 1, 3000)
+        && isValidStr(arn.overallConclusion, 1, 3000)
+        && arn.keyHighlights is list
+        && arn.keyHighlights.size() <= 12;
+    }
+
+    function isValidIntelligence(intel) {
+      return intel is map
+        && intel.keys().hasAll([
+          'auditObjective',
+          'processDescription',
+          'inherentRisks',
+          'riskAssessment',
+          'riskRating',
+          'controlObjectives',
+          'keyControls',
+          'controlWeaknesses',
+          'auditProcedures',
+          'walkthroughQuestions',
+          'potentialFindings',
+          'rootCauseAnalysis',
+          'recommendations',
+          'auditReportNarratives',
+          'generatedAt'
+        ])
+        && intel.keys().hasOnly([
+          'auditObjective',
+          'processDescription',
+          'inherentRisks',
+          'riskAssessment',
+          'riskRating',
+          'controlObjectives',
+          'keyControls',
+          'controlWeaknesses',
+          'auditProcedures',
+          'walkthroughQuestions',
+          'potentialFindings',
+          'rootCauseAnalysis',
+          'recommendations',
+          'auditReportNarratives',
+          'generatedAt'
+        ])
+        && isValidStr(intel.auditObjective, 1, 3000)
+        && isValidStr(intel.processDescription, 1, 6000)
+        && intel.inherentRisks is list && intel.inherentRisks.size() <= 25
+        && isValidRiskAssessment(intel.riskAssessment)
+        && isValidRiskRating(intel.riskRating)
+        && intel.controlObjectives is list && intel.controlObjectives.size() <= 25
+        && intel.keyControls is list && intel.keyControls.size() <= 30
+        && intel.controlWeaknesses is list && intel.controlWeaknesses.size() <= 25
+        && intel.auditProcedures is list && intel.auditProcedures.size() <= 35
+        && intel.walkthroughQuestions is list && intel.walkthroughQuestions.size() <= 25
+        && intel.potentialFindings is list && intel.potentialFindings.size() <= 25
+        && isValidRootCause(intel.rootCauseAnalysis)
+        && intel.recommendations is list && intel.recommendations.size() <= 25
+        && isValidReportNarratives(intel.auditReportNarratives)
+        && isValidStr(intel.generatedAt, 1, 60);
+    }
+
+    function isValidAuditArea(data) {
+      return data.keys().hasAll([
+          'ownerId', 'areaCode', 'name', 'domain', 'entityName',
+          'inherentRiskTier', 'regulatoryContext', 'description',
+          'lastAuditDate', 'hasIntelligence', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'areaCode', 'name', 'domain', 'entityName',
+          'inherentRiskTier', 'regulatoryContext', 'description',
+          'lastAuditDate', 'hasIntelligence', 'intelligence', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidStr(data.areaCode, 1, 40)
+        && isValidStr(data.name, 1, 200)
+        && isValidDomain(data.domain)
+        && isValidStr(data.entityName, 1, 160)
+        && isValidRiskRating(data.inherentRiskTier)
+        && isValidStr(data.regulatoryContext, 0, 400)
+        && isValidStr(data.description, 0, 2000)
+        && isValidStr(data.lastAuditDate, 0, 40)
+        && data.hasIntelligence is bool
+        && (!('intelligence' in data) || isValidIntelligence(data.intelligence))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidManagementActionPlan(mapVal) {
+      return mapVal is map
+        && mapVal.keys().hasAll(['actionSteps', 'responsibleOwner', 'targetDate', 'status'])
+        && mapVal.keys().hasOnly(['actionSteps', 'responsibleOwner', 'targetDate', 'status'])
+        && isValidStr(mapVal.actionSteps, 0, 3000)
+        && isValidStr(mapVal.responsibleOwner, 0, 160)
+        && isValidStr(mapVal.targetDate, 0, 40)
+        && mapVal.status in ['Open', 'In Progress', 'Agreed', 'Closed'];
+    }
+
+    function isValidAuditObservation(data) {
+      return data.keys().hasAll([
+          'ownerId', 'areaId', 'areaName', 'domain', 'observationTitle',
+          'observationText', 'evidenceRef', 'sampleTested', 'auditFinding',
+          'riskStatement', 'rootCause', 'recommendation', 'riskRating',
+          'managementActionPlan', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'areaId', 'areaName', 'domain', 'observationTitle',
+          'observationText', 'evidenceRef', 'sampleTested', 'auditFinding',
+          'riskStatement', 'rootCause', 'recommendation', 'riskRating',
+          'managementActionPlan', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && (data.areaId == '' || isValidId(data.areaId))
+        && isValidStr(data.areaName, 1, 200)
+        && isValidStr(data.domain, 1, 80)
+        && isValidStr(data.observationTitle, 1, 200)
+        && isValidStr(data.observationText, 1, 5000)
+        && isValidStr(data.evidenceRef, 0, 500)
+        && isValidStr(data.sampleTested, 0, 300)
+        && isValidStr(data.auditFinding, 0, 4000)
+        && isValidStr(data.riskStatement, 0, 3000)
+        && isValidStr(data.rootCause, 0, 3000)
+        && isValidStr(data.recommendation, 0, 3000)
+        && isValidRiskRating(data.riskRating)
+        && isValidManagementActionPlan(data.managementActionPlan)
+        && data.status in ['Draft', 'Validated', 'Reported', 'Closed']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidKnowledgeItem(data) {
+      return data.keys().hasAll([
+          'ownerId', 'type', 'domain', 'title', 'content',
+          'riskRating', 'regulatoryRef', 'tags', 'sourceAreaId',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'type', 'domain', 'title', 'content',
+          'riskRating', 'regulatoryRef', 'tags', 'sourceAreaId',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && data.type in ['finding', 'recommendation', 'control', 'procedure', 'regulatory_note', 'assistant_insight']
+        && isValidStr(data.domain, 1, 80)
+        && isValidStr(data.title, 1, 240)
+        && isValidStr(data.content, 1, 8000)
+        && data.riskRating in ['Critical', 'High', 'Moderate', 'Low', 'Informational']
+        && isValidStr(data.regulatoryRef, 0, 300)
+        && data.tags is list
+        && data.tags.size() <= 10
+        && (data.tags.size() == 0 || isValidStr(data.tags[0], 1, 40))
+        && (data.sourceAreaId == '' || isValidId(data.sourceAreaId))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditReport(data) {
+      return data.keys().hasAll([
+          'ownerId', 'areaId', 'title', 'entityName', 'reportPeriod',
+          'executiveSummary', 'scopeAndMethodology', 'overallConclusion',
+          'includedSections', 'includedObservationIds', 'status',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'areaId', 'title', 'entityName', 'reportPeriod',
+          'executiveSummary', 'scopeAndMethodology', 'overallConclusion',
+          'includedSections', 'includedObservationIds', 'status',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidId(data.areaId)
+        && isValidStr(data.title, 1, 240)
+        && isValidStr(data.entityName, 1, 160)
+        && isValidStr(data.reportPeriod, 1, 100)
+        && isValidStr(data.executiveSummary, 0, 8000)
+        && isValidStr(data.scopeAndMethodology, 0, 5000)
+        && isValidStr(data.overallConclusion, 0, 5000)
+        && data.includedSections is list
+        && data.includedSections.size() <= 15
+        && (data.includedSections.size() == 0 || isValidStr(data.includedSections[0], 1, 60))
+        && data.includedObservationIds is list
+        && data.includedObservationIds.size() <= 50
+        && (data.includedObservationIds.size() == 0 || isValidId(data.includedObservationIds[0]))
+        && data.status in ['Draft', 'Finalized']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditAreaMetadataUpdate(data) {
+      return isValidStr(data.areaCode, 1, 40)
+        && isValidStr(data.name, 1, 200)
+        && isValidDomain(data.domain)
+        && isValidStr(data.entityName, 1, 160)
+        && isValidRiskRating(data.inherentRiskTier)
+        && isValidStr(data.regulatoryContext, 0, 400)
+        && isValidStr(data.description, 0, 2000)
+        && isValidStr(data.lastAuditDate, 0, 40)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditAreaIntelligenceUpdate(data) {
+      return data.hasIntelligence is bool
+        && (!('intelligence' in data) || isValidIntelligence(data.intelligence))
+        && (!('inherentRiskTier' in data) || isValidRiskRating(data.inherentRiskTier))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditObservationUpdate(data) {
+      return isValidStr(data.areaName, 1, 200)
+        && isValidStr(data.domain, 1, 80)
+        && isValidStr(data.observationTitle, 1, 200)
+        && isValidStr(data.observationText, 1, 5000)
+        && isValidStr(data.evidenceRef, 0, 500)
+        && isValidStr(data.sampleTested, 0, 300)
+        && isValidStr(data.auditFinding, 0, 4000)
+        && isValidStr(data.riskStatement, 0, 3000)
+        && isValidStr(data.rootCause, 0, 3000)
+        && isValidStr(data.recommendation, 0, 3000)
+        && isValidRiskRating(data.riskRating)
+        && isValidManagementActionPlan(data.managementActionPlan)
+        && data.status in ['Draft', 'Validated', 'Reported', 'Closed']
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidKnowledgeItemUpdate(data) {
+      return data.type in ['finding', 'recommendation', 'control', 'procedure', 'regulatory_note', 'assistant_insight']
+        && isValidStr(data.domain, 1, 80)
+        && isValidStr(data.title, 1, 240)
+        && isValidStr(data.content, 1, 8000)
+        && data.riskRating in ['Critical', 'High', 'Moderate', 'Low', 'Informational']
+        && isValidStr(data.regulatoryRef, 0, 300)
+        && data.tags is list
+        && data.tags.size() <= 10
+        && (data.tags.size() == 0 || isValidStr(data.tags[0], 1, 40))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditReportUpdate(data) {
+      return isValidStr(data.title, 1, 240)
+        && isValidStr(data.entityName, 1, 160)
+        && isValidStr(data.reportPeriod, 1, 100)
+        && isValidStr(data.executiveSummary, 0, 8000)
+        && isValidStr(data.scopeAndMethodology, 0, 5000)
+        && isValidStr(data.overallConclusion, 0, 5000)
+        && data.includedSections is list
+        && data.includedSections.size() <= 15
+        && (data.includedSections.size() == 0 || isValidStr(data.includedSections[0], 1, 60))
+        && data.includedObservationIds is list
+        && data.includedObservationIds.size() <= 50
+        && (data.includedObservationIds.size() == 0 || isValidId(data.includedObservationIds[0]))
+        && data.status in ['Draft', 'Finalized']
+        && data.updatedAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection Rules (Application-Managed Auth with Strict Schema Validation)
+    // -------------------------------------------------------------------------
+
+    // 0. System Default Admin Seeding Marker
+    match /systemConfig/customAuthSeed {
+      allow get: if resource == null || resource.data.seeded == true;
+      allow list: if false;
+      allow create: if !exists(/databases/$(database)/documents/systemConfig/customAuthSeed)
+        && isValidCustomAuthSeed(incoming())
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // 1. Application-Managed Users Collection (bcrypt passwordHash)
+    match /users/{userId} {
+      allow get: if isValidId(userId);
+      allow list: if resource.data.username >= '';
+      allow create: if isValidId(userId)
+        && isValidUserDoc(incoming())
+        && incoming().userId == userId
+        && incoming().createdDate == request.time
+        && (incoming().lastLogin == null || incoming().lastLogin == request.time);
+      allow update: if isValidId(userId)
+        && isValidUserDoc(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdDate == existing().createdDate
+        && (
+          (
+            incoming().lastLogin == request.time
+            && incoming().diff(existing()).affectedKeys().hasOnly(['lastLogin'])
+          ) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'username', 'role', 'status']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['status']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['passwordHash', 'mustChangePassword'])
+        );
+      allow delete: if false;
+    }
+
+    // 2. Audit Universe Areas & Generated Intelligence
+    match /auditAreas/{areaId} {
+      allow get: if isValidId(areaId);
+      allow list: if resource.data.ownerId >= '';
+      allow create: if isValidId(areaId)
+        && isValidAuditArea(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(areaId)
+        && (!('ownerId' in existing()) || incoming().ownerId == existing().ownerId)
+        && (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt)
+        && incoming().updatedAt == request.time
+        && (
+          (
+            isValidAuditAreaMetadataUpdate(incoming())
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'areaCode', 'name', 'domain', 'entityName', 'inherentRiskTier',
+              'regulatoryContext', 'description', 'lastAuditDate', 'updatedAt'
+            ])
+          ) ||
+          (
+            isValidAuditAreaIntelligenceUpdate(incoming())
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'hasIntelligence', 'intelligence', 'inherentRiskTier', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(areaId);
+    }
+
+    // 3. Field Observations & AI-Synthesized Findings
+    match /auditObservations/{obsId} {
+      allow get: if isValidId(obsId);
+      allow list: if resource.data.ownerId >= '';
+      allow create: if isValidId(obsId)
+        && isValidAuditObservation(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          incoming().areaId == '' ||
+          exists(/databases/$(database)/documents/auditAreas/$(incoming().areaId))
+        );
+      allow update: if isValidId(obsId)
+        && isValidAuditObservationUpdate(incoming())
+        && (!('ownerId' in existing()) || incoming().ownerId == existing().ownerId)
+        && (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt)
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'observationTitle', 'observationText', 'evidenceRef', 'sampleTested',
+            'auditFinding', 'riskStatement', 'rootCause', 'recommendation',
+            'riskRating', 'managementActionPlan', 'status', 'updatedAt'
+          ]) ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'managementActionPlan', 'status', 'updatedAt'
+          ])
+        );
+      allow delete: if isValidId(obsId);
+    }
+
+    // 4. Expandable Philippine Internal Audit Knowledge Base
+    match /knowledgeItems/{itemId} {
+      allow get: if isValidId(itemId);
+      allow list: if resource.data.ownerId >= '';
+      allow create: if isValidId(itemId)
+        && isValidKnowledgeItem(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          incoming().sourceAreaId == '' ||
+          exists(/databases/$(database)/documents/auditAreas/$(incoming().sourceAreaId))
+        );
+      allow update: if isValidId(itemId)
+        && isValidKnowledgeItemUpdate(incoming())
+        && (!('ownerId' in existing()) || incoming().ownerId == existing().ownerId)
+        && (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt)
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'type', 'domain', 'title', 'content', 'riskRating', 'regulatoryRef', 'tags', 'updatedAt'
+        ]);
+      allow delete: if isValidId(itemId);
+    }
+
+    // 5. Saved Audit Reports
+    match /auditReports/{reportId} {
+      allow get: if isValidId(reportId);
+      allow list: if resource.data.ownerId >= '';
+      allow create: if isValidId(reportId)
+        && isValidAuditReport(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/auditAreas/$(incoming().areaId));
+      allow update: if isValidId(reportId)
+        && isValidAuditReportUpdate(incoming())
+        && (!('ownerId' in existing()) || incoming().ownerId == existing().ownerId)
+        && (!('areaId' in existing()) || incoming().areaId == existing().areaId)
+        && (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt)
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'entityName', 'reportPeriod', 'executiveSummary',
+          'scopeAndMethodology', 'overallConclusion', 'includedSections',
+          'includedObservationIds', 'status', 'updatedAt'
+        ]);
+      allow delete: if isValidId(reportId);
+    }
+  }
+}

@@ -1,0 +1,222 @@
+{
+  "entities": {
+    "CustomAuthSeed": {
+      "title": "CustomAuthSeed",
+      "description": "One-time initialization marker recording the default admin account seeding.",
+      "type": "object",
+      "properties": {
+        "seeded": { "type": "boolean" },
+        "adminUserId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seeded", "adminUserId", "createdAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Application-managed internal audit user stored in Firestore with bcrypt password hash, role, and status.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "username": { "type": "string", "minLength": 2, "maxLength": 60, "pattern": "^[a-z0-9_.\\-]+$" },
+        "passwordHash": { "type": "string", "minLength": 55, "maxLength": 100 },
+        "fullName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "role": { "type": "string", "enum": ["Administrator", "Auditor", "Viewer"] },
+        "status": { "type": "string", "enum": ["Active", "Disabled"] },
+        "mustChangePassword": { "type": "boolean" },
+        "createdDate": { "type": "string", "format": "date-time" },
+        "lastLogin": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "username", "passwordHash", "fullName", "role", "status", "mustChangePassword", "createdDate", "lastLogin"]
+    },
+    "AuditArea": {
+      "title": "AuditArea",
+      "description": "An auditable unit in the organization Audit Universe along with its 14-part audit intelligence.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "areaCode": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "domain": {
+          "type": "string",
+          "maxLength": 80,
+          "enum": [
+            "Philippine Corporate",
+            "Operations",
+            "Inventory",
+            "Finance",
+            "Compliance",
+            "Procurement",
+            "Asset Disposal",
+            "Treasury",
+            "Branch Operations",
+            "IT & Governance"
+          ]
+        },
+        "entityName": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "inherentRiskTier": {
+          "type": "string",
+          "enum": ["Critical", "High", "Moderate", "Low"]
+        },
+        "regulatoryContext": { "type": "string", "maxLength": 400 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "lastAuditDate": { "type": "string", "maxLength": 40 },
+        "hasIntelligence": { "type": "boolean" },
+        "intelligence": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "areaCode",
+        "name",
+        "domain",
+        "entityName",
+        "inherentRiskTier",
+        "regulatoryContext",
+        "description",
+        "lastAuditDate",
+        "hasIntelligence",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AuditObservation": {
+      "title": "AuditObservation",
+      "description": "Field audit observation entered by an auditor with AI-synthesized finding, risk statement, root cause, recommendation, rating, and management action plan.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "areaId": { "type": "string", "maxLength": 128 },
+        "areaName": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "domain": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "observationTitle": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "observationText": { "type": "string", "minLength": 1, "maxLength": 5000 },
+        "evidenceRef": { "type": "string", "maxLength": 500 },
+        "sampleTested": { "type": "string", "maxLength": 300 },
+        "auditFinding": { "type": "string", "maxLength": 4000 },
+        "riskStatement": { "type": "string", "maxLength": 3000 },
+        "rootCause": { "type": "string", "maxLength": 3000 },
+        "recommendation": { "type": "string", "maxLength": 3000 },
+        "riskRating": { "type": "string", "enum": ["Critical", "High", "Moderate", "Low"] },
+        "managementActionPlan": { "type": "object" },
+        "status": { "type": "string", "enum": ["Draft", "Validated", "Reported", "Closed"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "areaId",
+        "areaName",
+        "domain",
+        "observationTitle",
+        "observationText",
+        "evidenceRef",
+        "sampleTested",
+        "auditFinding",
+        "riskStatement",
+        "rootCause",
+        "recommendation",
+        "riskRating",
+        "managementActionPlan",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "KnowledgeItem": {
+      "title": "KnowledgeItem",
+      "description": "Reusable Philippine Internal Audit knowledge base entry.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": {
+          "type": "string",
+          "enum": ["finding", "recommendation", "control", "procedure", "regulatory_note", "assistant_insight"]
+        },
+        "domain": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "content": { "type": "string", "minLength": 1, "maxLength": 8000 },
+        "riskRating": { "type": "string", "enum": ["Critical", "High", "Moderate", "Low", "Informational"] },
+        "regulatoryRef": { "type": "string", "maxLength": 300 },
+        "tags": { "type": "array" },
+        "sourceAreaId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "type",
+        "domain",
+        "title",
+        "content",
+        "riskRating",
+        "regulatoryRef",
+        "tags",
+        "sourceAreaId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AuditReport": {
+      "title": "AuditReport",
+      "description": "Structured internal audit report built from an audit area, observations, and management action plans.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "areaId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "entityName": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "reportPeriod": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "executiveSummary": { "type": "string", "maxLength": 8000 },
+        "scopeAndMethodology": { "type": "string", "maxLength": 5000 },
+        "overallConclusion": { "type": "string", "maxLength": 5000 },
+        "includedSections": { "type": "array" },
+        "includedObservationIds": { "type": "array" },
+        "status": { "type": "string", "enum": ["Draft", "Finalized"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "areaId",
+        "title",
+        "entityName",
+        "reportPeriod",
+        "executiveSummary",
+        "scopeAndMethodology",
+        "overallConclusion",
+        "includedSections",
+        "includedObservationIds",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/systemConfig/{docId}": {
+      "schema": { "$ref": "#/entities/CustomAuthSeed" },
+      "description": "One-time system initialization marker recording default admin seeding."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Application-managed users with bcrypt password hashes, roles, status, createdDate, and lastLogin."
+    },
+    "/auditAreas/{areaId}": {
+      "schema": { "$ref": "#/entities/AuditArea" },
+      "description": "Audit Universe areas and 14-part audit intelligence."
+    },
+    "/auditObservations/{obsId}": {
+      "schema": { "$ref": "#/entities/AuditObservation" },
+      "description": "Field observations and AI-generated findings, root causes, and management action plans."
+    },
+    "/knowledgeItems/{itemId}": {
+      "schema": { "$ref": "#/entities/KnowledgeItem" },
+      "description": "Philippine Internal Audit knowledge base entries."
+    },
+    "/auditReports/{reportId}": {
+      "schema": { "$ref": "#/entities/AuditReport" },
+      "description": "Saved Internal Audit Report drafts and finalized reports."
+    }
+  }
+}

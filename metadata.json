@@ -1,0 +1,6 @@
+{
+  "name": "AuditIntel PH — Internal Audit Intelligence System",
+  "description": "AI-powered Internal Audit Intelligence System specialized in Philippine corporate auditing, operations, inventory, finance, compliance, procurement, disposal, treasury, and branch operations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
