@@ -155,6 +155,8 @@ export interface AuditAreaIntelligence {
   generatedAt: string;
 }
 
+export type AuditAreaStatus = 'Active' | 'Archived';
+
 export interface AuditArea {
   id: string;
   ownerId: string;
@@ -168,6 +170,8 @@ export interface AuditArea {
   lastAuditDate: string;
   hasIntelligence: boolean;
   intelligence?: AuditAreaIntelligence;
+  status?: AuditAreaStatus;
+  datasetId?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -266,3 +270,183 @@ export interface AssistantMessage {
     tags: string[];
   };
 }
+
+export type ProcessDocStatus = 'Draft' | 'Active' | 'Under Review';
+export type FlowchartNodeType =
+  | 'start'
+  | 'process'
+  | 'decision'
+  | 'document'
+  | 'system'
+  | 'database'
+  | 'control'
+  | 'manual'
+  | 'end';
+export type ProcessAttachmentKind = 'pdf' | 'docx' | 'image';
+
+export type ProcessAiActionType =
+  | 'risk_assessment'
+  | 'control_matrix'
+  | 'audit_procedures'
+  | 'walkthrough_questions'
+  | 'potential_findings'
+  | 'recommendations';
+
+export interface ProcessFlowNode {
+  id: string;
+  stepNo: string;
+  label: string;
+  actorRole: string;
+  nodeType: FlowchartNodeType;
+  branchNote: string;
+}
+
+export interface ProcessStepItem {
+  id: string;
+  stepNo: string;
+  stepTitle: string;
+  description: string;
+  actorRole: string;
+  systemUsed: string;
+  inputDoc: string;
+  outputDoc: string;
+  slaOrFrequency: string;
+}
+
+export interface ProcessOwnerInfo {
+  ownerName: string;
+  ownerRole: string;
+  department: string;
+  backupOwner: string;
+}
+
+export interface ProcessDocumentItem {
+  id: string;
+  docCode: string;
+  documentName: string;
+  docType: string;
+  sourceSystem: string;
+  retentionPeriod: string;
+}
+
+export interface ProcessSystemItem {
+  id: string;
+  systemName: string;
+  moduleName: string;
+  accessControlOwner: string;
+  interfaceType: string;
+}
+
+export interface ProcessRiskItem {
+  id: string;
+  riskCode: string;
+  title: string;
+  description: string;
+  likelihood: number;
+  impact: number;
+  riskRating: RiskRating;
+  regulatoryRef: string;
+}
+
+export interface ProcessControlItem {
+  id: string;
+  controlCode: string;
+  controlName: string;
+  description: string;
+  controlOwner: string;
+  frequency: string;
+  controlType: 'Preventive' | 'Detective' | 'Corrective';
+  automation: 'Automated' | 'IT-Dependent' | 'Manual';
+  mappedRiskCode: string;
+}
+
+export interface ProcessAttachmentItem {
+  id: string;
+  fileName: string;
+  fileType: ProcessAttachmentKind;
+  mimeType: string;
+  sizeBytes: number;
+  uploadedAt: string;
+  dataUrl: string;
+  notes: string;
+}
+
+export interface ProcessDocumentation {
+  id: string;
+  ownerId: string;
+  processCode: string;
+  processName: string;
+  domain: AuditDomain;
+  entityName: string;
+  version: string;
+  effectiveDate: string;
+  status: ProcessDocStatus;
+  linkedAreaId: string;
+  linkedAreaName: string;
+  processObjective: string;
+  scope: string;
+  processFlowNarrative: string;
+  flowchartNodes: ProcessFlowNode[];
+  processSteps: ProcessStepItem[];
+  processOwner: ProcessOwnerInfo;
+  documentsUsed: ProcessDocumentItem[];
+  systemsUsed: ProcessSystemItem[];
+  risks: ProcessRiskItem[];
+  existingControls: ProcessControlItem[];
+  attachments: ProcessAttachmentItem[];
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export type AuditImportSourceType = 'file' | 'manual' | 'starter' | 'reimport';
+
+export interface AuditImportAreaSnapshot {
+  areaCode: string;
+  name: string;
+  domain: AuditDomain;
+  entityName: string;
+  inherentRiskTier: RiskRating;
+  regulatoryContext: string;
+  description: string;
+  lastAuditDate: string;
+}
+
+export interface AuditImportRecord {
+  id: string;
+  ownerId: string;
+  datasetName: string;
+  uploadedByUserId: string;
+  uploadedByName: string;
+  uploadedByUsername: string;
+  recordCount: number;
+  sourceType: AuditImportSourceType;
+  status: 'Active' | 'Archived';
+  records: AuditImportAreaSnapshot[];
+  createdAreaIds: string[];
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export type AuditUniverseLogAction =
+  | 'Upload Audit Universe'
+  | 'Edit Audit Universe'
+  | 'Duplicate Audit Universe'
+  | 'Archive Audit Universe'
+  | 'Restore Audit Universe'
+  | 'Delete Audit Universe';
+
+export interface AuditLogEntry {
+  id: string;
+  userId: string;
+  userName: string;
+  username: string;
+  action: AuditUniverseLogAction;
+  areaId: string;
+  areaCode: string;
+  areaName: string;
+  details: string;
+  eventDate: string;
+  eventTime: string;
+  createdAt?: unknown;
+}
+

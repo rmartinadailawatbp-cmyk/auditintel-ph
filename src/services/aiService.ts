@@ -6,6 +6,8 @@ import type {
   KnowledgeItem,
   KnowledgeItemType,
   ManagementActionPlan,
+  ProcessAiActionType,
+  ProcessDocumentation,
   RiskRating,
 } from '../types/audit';
 
@@ -21,31 +23,38 @@ export interface SynthesizedObservationResult {
 const CAPACITY_ERROR_MESSAGE =
   'Audit Intelligence service is temporarily unavailable due to model capacity constraints. Please try again later.';
 
-const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 2000;
+const MAX_RETRIES = 2;
+const BASE_RETRY_DELAY_MS = 1500;
+
+class NonRetryableApiError extends Error {}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isTransientCapacityFailure(status: number | undefined, rawText: string): boolean {
-  if (status === 429 || status === 500 || status === 503) return true;
+function isQuotaExhaustedMessage(rawText: string): boolean {
   const upper = rawText.toUpperCase();
   return (
-    upper.includes('429') ||
-    upper.includes('500') ||
-    upper.includes('503') ||
-    upper.includes('UNAVAILABLE') ||
-    upper.includes('RESOURCE_EXHAUSTED') ||
-    upper.includes('CAPACITY') ||
-    upper.includes('OVERLOADED')
+    upper.includes('QUOTA') ||
+    upper.includes('SETTINGS > SECRETS') ||
+    upper.includes('FREE-TIER') ||
+    upper.includes('FREE_TIER') ||
+    upper.includes('GENERATEREQUESTSPERDAY')
   );
 }
 
-function toFriendlyErrorMessage(status: number | undefined, rawText: string): string {
-  if (isTransientCapacityFailure(status, rawText)) {
-    return CAPACITY_ERROR_MESSAGE;
-  }
+function isTransientStatus(status: number | undefined, rawText: string, quotaExhausted?: boolean): boolean {
+  if (quotaExhausted || isQuotaExhaustedMessage(rawText)) return false;
+  if (status === 429 || status === 500 || status === 503) return true;
+  const upper = rawText.toUpperCase();
+  return (
+    upper.includes('UNAVAILABLE') ||
+    upper.includes('OVERLOADED') ||
+    upper.includes('HIGH DEMAND')
+  );
+}
+
+function toFriendlyErrorMessage(rawText: string): string {
   const trimmed = rawText.trim();
   if (!trimmed || trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.includes('"error"')) {
     return CAPACITY_ERROR_MESSAGE;
@@ -80,26 +89,29 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
         typeof parsedData?.error === 'string'
           ? parsedData.error
           : rawText || `HTTP ${res.status}`;
+      const quotaExhausted = parsedData?.quotaExhausted === true;
 
-      if (isTransientCapacityFailure(res.status, serverMsg) && attempt < MAX_RETRIES) {
-        lastErrorMessage = CAPACITY_ERROR_MESSAGE;
-        await sleep(RETRY_DELAY_MS);
+      if (isTransientStatus(res.status, serverMsg, quotaExhausted) && attempt < MAX_RETRIES) {
+        lastErrorMessage = toFriendlyErrorMessage(serverMsg);
+        await sleep(BASE_RETRY_DELAY_MS * Math.pow(2, attempt));
         continue;
       }
 
-      throw new Error(toFriendlyErrorMessage(res.status, serverMsg));
+      throw new NonRetryableApiError(toFriendlyErrorMessage(serverMsg));
     } catch (err) {
+      if (err instanceof NonRetryableApiError) {
+        throw err;
+      }
       const msg = err instanceof Error ? err.message : String(err);
-      const isNetworkOrCapacity =
-        err instanceof TypeError || isTransientCapacityFailure(undefined, msg);
+      const isNetworkFailure = err instanceof TypeError;
 
-      if (isNetworkOrCapacity && attempt < MAX_RETRIES) {
+      if (isNetworkFailure && attempt < MAX_RETRIES) {
         lastErrorMessage = CAPACITY_ERROR_MESSAGE;
-        await sleep(RETRY_DELAY_MS);
+        await sleep(BASE_RETRY_DELAY_MS * Math.pow(2, attempt));
         continue;
       }
 
-      throw new Error(toFriendlyErrorMessage(undefined, msg || lastErrorMessage));
+      throw new Error(toFriendlyErrorMessage(msg || lastErrorMessage));
     }
   }
 
@@ -233,6 +245,58 @@ export async function refineAuditReport(params: {
     currentScope: params.currentScope,
     currentConclusion: params.currentConclusion,
   });
+}
+
+export async function generateFromProcessDocumentation(params: {
+  actionType: ProcessAiActionType;
+  processDoc: ProcessDocumentation;
+  linkedArea: AuditArea | null;
+  knowledgeItems: KnowledgeItem[];
+}): Promise<Partial<AuditAreaIntelligence>> {
+  const relevantKnowledge = params.knowledgeItems
+    .filter((k) => k.domain === params.processDoc.domain || k.domain === 'Philippine Corporate')
+    .slice(0, 6)
+    .map((k) => `[${k.type}] ${k.title}: ${k.content.slice(0, 300)}`);
+
+  return postJson<Partial<AuditAreaIntelligence>>('/api/audit/generate-from-process', {
+    actionType: params.actionType,
+    processDoc: {
+      processCode: params.processDoc.processCode,
+      processName: params.processDoc.processName,
+      domain: params.processDoc.domain,
+      entityName: params.processDoc.entityName,
+      linkedAreaName: params.processDoc.linkedAreaName,
+      processObjective: params.processDoc.processObjective,
+      scope: params.processDoc.scope,
+      processFlowNarrative: params.processDoc.processFlowNarrative,
+      processOwner: params.processDoc.processOwner,
+      processSteps: params.processDoc.processSteps,
+      documentsUsed: params.processDoc.documentsUsed,
+      systemsUsed: params.processDoc.systemsUsed,
+      risks: params.processDoc.risks,
+      existingControls: params.processDoc.existingControls,
+    },
+    linkedArea: params.linkedArea
+      ? {
+          areaCode: params.linkedArea.areaCode,
+          name: params.linkedArea.name,
+          regulatoryContext: params.linkedArea.regulatoryContext,
+        }
+      : null,
+    knowledgeContext: relevantKnowledge,
+  });
+}
+
+export async function generateProcessFlowchartAi(params: {
+  processName: string;
+  domain: string;
+  processFlowNarrative: string;
+  processSteps: ProcessDocumentation['processSteps'];
+}): Promise<{ flowchartNodes: ProcessDocumentation['flowchartNodes'] }> {
+  return postJson<{ flowchartNodes: ProcessDocumentation['flowchartNodes'] }>(
+    '/api/audit/generate-process-flow',
+    params
+  );
 }
 
 export type { AssistantMessage };

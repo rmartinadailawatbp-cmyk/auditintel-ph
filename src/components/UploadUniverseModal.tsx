@@ -4,6 +4,7 @@ import {
   AUDIT_DOMAINS,
   RISK_RATINGS,
   type AuditDomain,
+  type AuditImportSourceType,
   type RiskRating,
 } from '../types/audit';
 import {
@@ -15,10 +16,15 @@ import {
   parseUniverseFile,
 } from '../utils/universeParser';
 
+export interface UploadImportMeta {
+  datasetName: string;
+  sourceType: AuditImportSourceType;
+}
+
 interface UploadUniverseModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onImportAreas: (areas: StarterAuditAreaInput[]) => Promise<void>;
+  onImportAreas: (areas: StarterAuditAreaInput[], meta?: UploadImportMeta) => Promise<void>;
 }
 
 export function UploadUniverseModal({
@@ -63,7 +69,10 @@ export function UploadUniverseModal({
     setIsSaving(true);
     setError('');
     try {
-      await onImportAreas(parsedAreas);
+      await onImportAreas(parsedAreas, {
+        datasetName: fileName || 'Audit Universe Upload',
+        sourceType: 'file',
+      });
       setParsedAreas([]);
       setFileName('');
       onClose();
@@ -78,7 +87,10 @@ export function UploadUniverseModal({
     setIsSaving(true);
     setError('');
     try {
-      await onImportAreas(STARTER_PH_AUDIT_UNIVERSE);
+      await onImportAreas(STARTER_PH_AUDIT_UNIVERSE, {
+        datasetName: 'Philippine Corporate Starter Universe (9 Areas)',
+        sourceType: 'starter',
+      });
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load starter Audit Universe.');
@@ -96,18 +108,25 @@ export function UploadUniverseModal({
     setIsSaving(true);
     setError('');
     try {
-      await onImportAreas([
+      const finalCode = areaCode.trim() || `AUD-${Date.now().toString().slice(-3)}`;
+      await onImportAreas(
+        [
+          {
+            areaCode: finalCode,
+            name: name.trim(),
+            domain,
+            entityName: entityName.trim() || 'Corporate Head Office',
+            inherentRiskTier,
+            regulatoryContext: regulatoryContext.trim(),
+            description: description.trim(),
+            lastAuditDate: lastAuditDate.trim() || 'Unscheduled',
+          },
+        ],
         {
-          areaCode: areaCode.trim() || `AUD-${Date.now().toString().slice(-3)}`,
-          name: name.trim(),
-          domain,
-          entityName: entityName.trim() || 'Corporate Head Office',
-          inherentRiskTier,
-          regulatoryContext: regulatoryContext.trim(),
-          description: description.trim(),
-          lastAuditDate: lastAuditDate.trim() || 'Unscheduled',
-        },
-      ]);
+          datasetName: `Manual Entry: ${finalCode} - ${name.trim()}`,
+          sourceType: 'manual',
+        }
+      );
       setAreaCode('');
       setName('');
       setEntityName('');

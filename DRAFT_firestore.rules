@@ -184,7 +184,8 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'ownerId', 'areaCode', 'name', 'domain', 'entityName',
           'inherentRiskTier', 'regulatoryContext', 'description',
-          'lastAuditDate', 'hasIntelligence', 'intelligence', 'createdAt', 'updatedAt'
+          'lastAuditDate', 'hasIntelligence', 'intelligence', 'status', 'datasetId',
+          'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerId)
         && isValidStr(data.areaCode, 1, 40)
@@ -197,6 +198,8 @@ service cloud.firestore {
         && isValidStr(data.lastAuditDate, 0, 40)
         && data.hasIntelligence is bool
         && (!('intelligence' in data) || isValidIntelligence(data.intelligence))
+        && (!('status' in data) || data.status in ['Active', 'Archived'])
+        && (!('datasetId' in data) || data.datasetId == '' || isValidId(data.datasetId))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -291,7 +294,7 @@ service cloud.firestore {
         && isValidStr(data.scopeAndMethodology, 0, 5000)
         && isValidStr(data.overallConclusion, 0, 5000)
         && data.includedSections is list
-        && data.includedSections.size() <= 15
+        && data.includedSections.size() <= 30
         && (data.includedSections.size() == 0 || isValidStr(data.includedSections[0], 1, 60))
         && data.includedObservationIds is list
         && data.includedObservationIds.size() <= 50
@@ -310,6 +313,12 @@ service cloud.firestore {
         && isValidStr(data.regulatoryContext, 0, 400)
         && isValidStr(data.description, 0, 2000)
         && isValidStr(data.lastAuditDate, 0, 40)
+        && (!('status' in data) || data.status in ['Active', 'Archived'])
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditAreaStatusUpdate(data) {
+      return data.status in ['Active', 'Archived']
         && data.updatedAt is timestamp;
     }
 
@@ -358,13 +367,133 @@ service cloud.firestore {
         && isValidStr(data.scopeAndMethodology, 0, 5000)
         && isValidStr(data.overallConclusion, 0, 5000)
         && data.includedSections is list
-        && data.includedSections.size() <= 15
+        && data.includedSections.size() <= 30
         && (data.includedSections.size() == 0 || isValidStr(data.includedSections[0], 1, 60))
         && data.includedObservationIds is list
         && data.includedObservationIds.size() <= 50
         && (data.includedObservationIds.size() == 0 || isValidId(data.includedObservationIds[0]))
         && data.status in ['Draft', 'Finalized']
         && data.updatedAt is timestamp;
+    }
+
+    function isValidProcessOwner(owner) {
+      return owner is map
+        && owner.keys().hasAll(['ownerName', 'ownerRole', 'department', 'backupOwner'])
+        && owner.keys().hasOnly(['ownerName', 'ownerRole', 'department', 'backupOwner'])
+        && isValidStr(owner.ownerName, 1, 120)
+        && isValidStr(owner.ownerRole, 1, 120)
+        && isValidStr(owner.department, 1, 120)
+        && isValidStr(owner.backupOwner, 0, 120);
+    }
+
+    function isValidProcessDocCore(data) {
+      return isValidStr(data.processCode, 1, 40)
+        && isValidStr(data.processName, 1, 200)
+        && isValidDomain(data.domain)
+        && isValidStr(data.entityName, 1, 160)
+        && isValidStr(data.version, 1, 30)
+        && isValidStr(data.effectiveDate, 1, 40)
+        && data.status in ['Draft', 'Active', 'Under Review']
+        && (data.linkedAreaId == '' || isValidId(data.linkedAreaId))
+        && isValidStr(data.linkedAreaName, 0, 200)
+        && isValidStr(data.processObjective, 1, 4000)
+        && isValidStr(data.scope, 1, 4000)
+        && isValidStr(data.processFlowNarrative, 0, 6000)
+        && data.flowchartNodes is list && data.flowchartNodes.size() <= 30
+        && data.processSteps is list && data.processSteps.size() <= 40
+        && isValidProcessOwner(data.processOwner)
+        && data.documentsUsed is list && data.documentsUsed.size() <= 30
+        && data.systemsUsed is list && data.systemsUsed.size() <= 20
+        && data.risks is list && data.risks.size() <= 30
+        && data.existingControls is list && data.existingControls.size() <= 30
+        && data.attachments is list && data.attachments.size() <= 10;
+    }
+
+    function isValidProcessDocumentation(data) {
+      return data.keys().hasAll([
+          'ownerId', 'processCode', 'processName', 'domain', 'entityName',
+          'version', 'effectiveDate', 'status', 'linkedAreaId', 'linkedAreaName',
+          'processObjective', 'scope', 'processFlowNarrative', 'flowchartNodes',
+          'processSteps', 'processOwner', 'documentsUsed', 'systemsUsed',
+          'risks', 'existingControls', 'attachments', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'processCode', 'processName', 'domain', 'entityName',
+          'version', 'effectiveDate', 'status', 'linkedAreaId', 'linkedAreaName',
+          'processObjective', 'scope', 'processFlowNarrative', 'flowchartNodes',
+          'processSteps', 'processOwner', 'documentsUsed', 'systemsUsed',
+          'risks', 'existingControls', 'attachments', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidProcessDocCore(data)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidProcessDocumentationUpdate(data) {
+      return isValidProcessDocCore(data)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditImportRecord(data) {
+      return data.keys().hasAll([
+          'ownerId', 'datasetName', 'uploadedByUserId', 'uploadedByName',
+          'uploadedByUsername', 'recordCount', 'sourceType', 'status',
+          'records', 'createdAreaIds', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'datasetName', 'uploadedByUserId', 'uploadedByName',
+          'uploadedByUsername', 'recordCount', 'sourceType', 'status',
+          'records', 'createdAreaIds', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && isValidStr(data.datasetName, 1, 200)
+        && isValidId(data.uploadedByUserId)
+        && isValidStr(data.uploadedByName, 1, 120)
+        && isValidUsername(data.uploadedByUsername)
+        && data.recordCount is int && data.recordCount >= 0 && data.recordCount <= 100
+        && data.sourceType in ['file', 'manual', 'starter', 'reimport']
+        && data.status in ['Active', 'Archived']
+        && data.records is list && data.records.size() <= 60
+        && (data.records.size() == 0 || data.records[0] is map)
+        && data.createdAreaIds is list && data.createdAreaIds.size() <= 60
+        && (data.createdAreaIds.size() == 0 || isValidId(data.createdAreaIds[0]))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditImportStatusUpdate(data) {
+      return data.status in ['Active', 'Archived']
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll([
+          'userId', 'userName', 'username', 'action', 'areaId',
+          'areaCode', 'areaName', 'details', 'eventDate', 'eventTime', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'userName', 'username', 'action', 'areaId',
+          'areaCode', 'areaName', 'details', 'eventDate', 'eventTime', 'createdAt'
+        ])
+        && isValidId(data.userId)
+        && isValidStr(data.userName, 1, 120)
+        && isValidUsername(data.username)
+        && data.action in [
+          'Upload Audit Universe',
+          'Edit Audit Universe',
+          'Duplicate Audit Universe',
+          'Archive Audit Universe',
+          'Restore Audit Universe',
+          'Delete Audit Universe'
+        ]
+        && (data.areaId == '' || isValidId(data.areaId))
+        && isValidStr(data.areaCode, 0, 80)
+        && isValidStr(data.areaName, 1, 240)
+        && isValidStr(data.details, 0, 1000)
+        && isValidStr(data.eventDate, 1, 40)
+        && isValidStr(data.eventTime, 1, 40)
+        && data.createdAt is timestamp;
     }
 
     // -------------------------------------------------------------------------
@@ -423,13 +552,19 @@ service cloud.firestore {
             isValidAuditAreaMetadataUpdate(incoming())
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'areaCode', 'name', 'domain', 'entityName', 'inherentRiskTier',
-              'regulatoryContext', 'description', 'lastAuditDate', 'updatedAt'
+              'regulatoryContext', 'description', 'lastAuditDate', 'status', 'updatedAt'
             ])
           ) ||
           (
             isValidAuditAreaIntelligenceUpdate(incoming())
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'hasIntelligence', 'intelligence', 'inherentRiskTier', 'updatedAt'
+            ])
+          ) ||
+          (
+            isValidAuditAreaStatusUpdate(incoming())
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'updatedAt'
             ])
           )
         );
@@ -510,6 +645,64 @@ service cloud.firestore {
           'includedObservationIds', 'status', 'updatedAt'
         ]);
       allow delete: if isValidId(reportId);
+    }
+
+    // 6. Process Documentation Repository
+    match /processDocumentations/{processId} {
+      allow get: if isValidId(processId);
+      allow list: if resource.data.ownerId >= '';
+      allow create: if isValidId(processId)
+        && isValidProcessDocumentation(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          incoming().linkedAreaId == '' ||
+          exists(/databases/$(database)/documents/auditAreas/$(incoming().linkedAreaId))
+        );
+      allow update: if isValidId(processId)
+        && isValidProcessDocumentationUpdate(incoming())
+        && (!('ownerId' in existing()) || incoming().ownerId == existing().ownerId)
+        && (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt)
+        && incoming().updatedAt == request.time
+        && (
+          incoming().linkedAreaId == '' ||
+          exists(/databases/$(database)/documents/auditAreas/$(incoming().linkedAreaId))
+        )
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'processCode', 'processName', 'domain', 'entityName', 'version',
+          'effectiveDate', 'status', 'linkedAreaId', 'linkedAreaName',
+          'processObjective', 'scope', 'processFlowNarrative', 'flowchartNodes',
+          'processSteps', 'processOwner', 'documentsUsed', 'systemsUsed',
+          'risks', 'existingControls', 'attachments', 'updatedAt'
+        ]);
+      allow delete: if isValidId(processId);
+    }
+
+    // 7. Audit Universe Import History
+    match /auditImportHistory/{importId} {
+      allow get: if isValidId(importId);
+      allow list: if resource.data.ownerId >= '';
+      allow create: if isValidId(importId)
+        && isValidAuditImportRecord(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(importId)
+        && isValidAuditImportStatusUpdate(incoming())
+        && (!('ownerId' in existing()) || incoming().ownerId == existing().ownerId)
+        && (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt)
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+      allow delete: if isValidId(importId);
+    }
+
+    // 8. Audit Universe Activity Logs (Immutable)
+    match /auditLogs/{logId} {
+      allow get: if isValidId(logId);
+      allow list: if resource.data.userId >= '';
+      allow create: if isValidId(logId)
+        && isValidAuditLog(incoming())
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
     }
   }
 }

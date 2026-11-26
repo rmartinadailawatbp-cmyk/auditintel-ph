@@ -7,18 +7,39 @@ import {
   getDocFromServer,
   getDocs,
   getFirestore,
+  initializeFirestore,
   limit,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   query,
   serverTimestamp,
   updateDoc,
   where,
   writeBatch,
+  type Firestore,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 import type { UserProfile, UserRole, UserStatus } from './types/audit';
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+function createFirestoreInstance(): Firestore {
+  try {
+    return initializeFirestore(
+      app,
+      {
+        localCache: persistentLocalCache({
+          tabManager: persistentMultipleTabManager(),
+        }),
+      },
+      firebaseConfig.firestoreDatabaseId
+    );
+  } catch {
+    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+  }
+}
+
+export const db = createFirestoreInstance();
 
 const BCRYPT_ROUNDS = 10;
 const DEFAULT_ADMIN_USER_ID = 'user_admin';

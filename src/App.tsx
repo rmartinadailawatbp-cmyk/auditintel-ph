@@ -1,58 +1,92 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Archive,
   BookOpen,
+  CheckSquare,
+  Copy,
+  Edit3,
   FileSpreadsheet,
   Loader2,
   LogOut,
   Plus,
   RefreshCw,
   Search,
+  SlidersHorizontal,
   Sparkles,
+  Square,
   Trash2,
   Upload,
   Users,
 } from 'lucide-react';
 import { ensureDefaultAdminSeeded, setActiveActorUserId } from './firebase';
 import {
+  bulkDeleteAuditAreasCascade,
+  bulkSetAuditAreaStatus,
   createAuditAreasBatch,
+  createAuditImportRecord,
+  createAuditLogEntry,
   createAuditObservation,
   createKnowledgeItem,
   createKnowledgeItemsBatch,
-  deleteAuditArea,
+  createProcessDocumentation,
+  deleteAuditImportRecord,
   deleteAuditObservation,
   deleteKnowledgeItem,
+  deleteProcessDocumentation,
+  duplicateAuditArea,
   saveAuditAreaIntelligence,
   saveAuditReport,
   subscribeAllUsers,
   subscribeAuditAreas,
+  subscribeAuditImportHistory,
+  subscribeAuditLogs,
   subscribeAuditReports,
   subscribeCurrentUserProfile,
   subscribeKnowledgeItems,
   subscribeObservations,
+  subscribeProcessDocumentations,
+  updateAuditAreaMetadata,
+  updateAuditImportStatus,
   updateAuditObservation,
+  updateProcessDocumentation,
+  type SnapshotSyncMeta,
+  type UpdateAuditAreaMetadataInput,
 } from './services/firestoreService';
-import { generateAreaIntelligence } from './services/aiService';
+import {
+  generateAreaIntelligence,
+  generateFromProcessDocumentation,
+} from './services/aiService';
 import {
   STARTER_PH_AUDIT_UNIVERSE,
   STARTER_PH_KNOWLEDGE_ITEMS,
   type StarterAuditAreaInput,
   type StarterKnowledgeInput,
 } from './data/starterUniverse';
+import { findProcessDocForArea, syncProcessDocToAreaIntelligence } from './utils/processSync';
+import {
+  sanitizeIntelligence,
+  sanitizeProcessDocumentationInput,
+  type ProcessDocumentationInput,
+} from './utils/validation';
 import {
   AUDIT_DOMAINS,
   type AuditArea,
   type AuditAreaIntelligence,
   type AuditDomain,
+  type AuditImportRecord,
+  type AuditLogEntry,
   type AuditObservation,
   type AuditReport,
   type KnowledgeItem,
   type ObservationStatus,
+  type ProcessAiActionType,
+  type ProcessDocumentation,
   type UserProfile,
   type WorkspaceTab,
 } from './types/audit';
 import { RiskIndicator } from './components/RiskBadge';
 import { AuthScreen } from './components/AuthScreen';
-import { UploadUniverseModal } from './components/UploadUniverseModal';
+import { UploadUniverseModal, type UploadImportMeta } from './components/UploadUniverseModal';
 import { OverviewTab } from './components/OverviewTab';
 import { RiskAssessmentTab } from './components/RiskAssessmentTab';
 import { ControlMatrixTab } from './components/ControlMatrixTab';
@@ -64,6 +98,12 @@ import { KnowledgeBaseModal } from './components/KnowledgeBaseModal';
 import { AuditAssistantDrawer } from './components/AuditAssistantDrawer';
 import { UsersModuleModal } from './components/UsersModuleModal';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
+import { ProcessDocumentationView } from './components/ProcessDocumentationView';
+import {
+  AuditUniverseManagementModal,
+  DeleteUniverseConfirmModal,
+  EditAuditAreaModal,
+} from './components/AuditUniverseModals';
 
 const WORKSPACE_TABS: WorkspaceTab[] = [
   'Overview',
@@ -88,34 +128,58 @@ export default function App() {
   const [observations, setObservations] = useState<AuditObservation[]>([]);
   const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
   const [savedReports, setSavedReports] = useState<AuditReport[]>([]);
+  const [processDocs, setProcessDocs] = useState<ProcessDocumentation[]>([]);
+  const [importHistory, setImportHistory] = useState<AuditImportRecord[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [syncMeta, setSyncMeta] = useState<SnapshotSyncMeta | null>(null);
   const [dataLoading, setDataLoading] = useState(false);
 
   // Workspace State
+  const [workspaceMode, setWorkspaceMode] = useState<'audit_areas' | 'process_docs'>('audit_areas');
   const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('Overview');
   const [universeSearch, setUniverseSearch] = useState('');
   const [domainFilter, setDomainFilter] = useState<string>('ALL');
+  const [sidebarSelectMode, setSidebarSelectMode] = useState(false);
+  const [sidebarSelectedIds, setSidebarSelectedIds] = useState<Set<string>>(new Set());
 
   // Modals & Drawers
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showKnowledgeModal, setShowKnowledgeModal] = useState(false);
   const [showAssistantDrawer, setShowAssistantDrawer] = useState(false);
   const [showUsersModal, setShowUsersModal] = useState(false);
+  const [showUniverseMgmtModal, setShowUniverseMgmtModal] = useState(false);
+  const [universeMgmtTab, setUniverseMgmtTab] = useState<
+    'active' | 'archived' | 'history' | 'logs'
+  >('active');
+  const [editingArea, setEditingArea] = useState<AuditArea | null>(null);
+  const [pendingDeleteAreas, setPendingDeleteAreas] = useState<AuditArea[]>([]);
 
   // AI Generation State
   const [generatingAreaId, setGeneratingAreaId] = useState<string | null>(null);
   const [generationError, setGenerationError] = useState('');
   const inFlightAreasRef = useRef<Set<string>>(new Set());
   const failedAreasRef = useRef<Set<string>>(new Set());
+  const quotaBlockedRef = useRef(false);
 
   const handleSignOut = useCallback(() => {
     setActiveActorUserId(null);
     setUserProfile(null);
     setOrgUsers([]);
+    setProcessDocs([]);
+    setImportHistory([]);
+    setAuditLogs([]);
+    setSyncMeta(null);
+    setWorkspaceMode('audit_areas');
     setShowUsersModal(false);
     setShowUploadModal(false);
     setShowKnowledgeModal(false);
     setShowAssistantDrawer(false);
+    setShowUniverseMgmtModal(false);
+    setEditingArea(null);
+    setPendingDeleteAreas([]);
+    setSidebarSelectMode(false);
+    setSidebarSelectedIds(new Set());
   }, []);
 
   // Seed default administrator account (admin / Admin@2026) on first startup
@@ -182,45 +246,75 @@ export default function App() {
       setObservations([]);
       setKnowledgeItems([]);
       setSavedReports([]);
+      setProcessDocs([]);
+      setSyncMeta(null);
       setSelectedAreaId(null);
       return;
     }
 
     setDataLoading(true);
-    const unsubAreas = subscribeAuditAreas((items) => {
-      setAuditAreas(items);
-      setDataLoading(false);
-      setSelectedAreaId((prev) => {
-        if (prev && items.some((a) => a.id === prev)) return prev;
-        return items[0]?.id ?? null;
-      });
-    });
+    const unsubAreas = subscribeAuditAreas(
+      (items) => {
+        setAuditAreas(items);
+        setDataLoading(false);
+        const activeOnly = items.filter((a) => a.status !== 'Archived');
+        setSelectedAreaId((prev) => {
+          if (prev && activeOnly.some((a) => a.id === prev)) return prev;
+          return activeOnly[0]?.id ?? null;
+        });
+      },
+      undefined,
+      (meta) => setSyncMeta(meta)
+    );
 
     const unsubObs = subscribeObservations(setObservations);
     const unsubKb = subscribeKnowledgeItems(setKnowledgeItems);
     const unsubRep = subscribeAuditReports(setSavedReports);
+    const unsubProcesses = subscribeProcessDocumentations((items, meta) => {
+      setProcessDocs(items);
+      setSyncMeta(meta);
+    });
 
     return () => {
       unsubAreas();
       unsubObs();
       unsubKb();
       unsubRep();
+      unsubProcesses();
     };
   }, [userProfile?.userId, userProfile?.status, userProfile?.mustChangePassword]);
 
-  // Subscribe to organization users list for Administrators
+  // Subscribe to organization users, import history, and audit logs for Administrators
   useEffect(() => {
     if (!isAdmin) {
       setOrgUsers([]);
+      setImportHistory([]);
+      setAuditLogs([]);
       return;
     }
     const unsubUsers = subscribeAllUsers(setOrgUsers);
-    return () => unsubUsers();
+    const unsubImports = subscribeAuditImportHistory(setImportHistory);
+    const unsubLogs = subscribeAuditLogs(setAuditLogs);
+    return () => {
+      unsubUsers();
+      unsubImports();
+      unsubLogs();
+    };
   }, [isAdmin]);
 
+  const activeAuditAreas = useMemo(
+    () => auditAreas.filter((a) => a.status !== 'Archived'),
+    [auditAreas]
+  );
+
+  const archivedAuditAreas = useMemo(
+    () => auditAreas.filter((a) => a.status === 'Archived'),
+    [auditAreas]
+  );
+
   const selectedArea = useMemo(
-    () => auditAreas.find((a) => a.id === selectedAreaId) ?? null,
-    [auditAreas, selectedAreaId]
+    () => activeAuditAreas.find((a) => a.id === selectedAreaId) ?? null,
+    [activeAuditAreas, selectedAreaId]
   );
 
   const triggerAreaGeneration = useCallback(
@@ -228,6 +322,7 @@ export default function App() {
       if (!userProfile || !canWrite || inFlightAreasRef.current.has(area.id)) return;
       if (isManualRetry) {
         failedAreasRef.current.delete(area.id);
+        quotaBlockedRef.current = false;
       }
       inFlightAreasRef.current.add(area.id);
       setGeneratingAreaId(area.id);
@@ -235,14 +330,18 @@ export default function App() {
       try {
         const intel = await generateAreaIntelligence(area, knowledgeItems);
         failedAreasRef.current.delete(area.id);
+        quotaBlockedRef.current = false;
         await saveAuditAreaIntelligence(area.id, intel, intel.riskRating);
       } catch (err) {
         failedAreasRef.current.add(area.id);
-        setGenerationError(
+        const message =
           err instanceof Error
             ? err.message
-            : 'Audit Intelligence service is temporarily unavailable due to model capacity constraints. Please try again later.'
-        );
+            : 'Audit Intelligence service is temporarily unavailable due to model capacity constraints. Please try again later.';
+        if (message.toLowerCase().includes('quota') || message.includes('Settings > Secrets')) {
+          quotaBlockedRef.current = true;
+        }
+        setGenerationError(message);
       } finally {
         inFlightAreasRef.current.delete(area.id);
         setGeneratingAreaId((curr) => (curr === area.id ? null : curr));
@@ -266,14 +365,15 @@ export default function App() {
       selectedArea &&
       (!selectedArea.hasIntelligence || !selectedArea.intelligence) &&
       !inFlightAreasRef.current.has(selectedArea.id) &&
-      !failedAreasRef.current.has(selectedArea.id)
+      !failedAreasRef.current.has(selectedArea.id) &&
+      !quotaBlockedRef.current
     ) {
       void triggerAreaGeneration(selectedArea);
     }
   }, [userProfile, canWrite, selectedArea, triggerAreaGeneration]);
 
   const filteredAreas = useMemo(() => {
-    return auditAreas.filter((area) => {
+    return activeAuditAreas.filter((area) => {
       if (domainFilter !== 'ALL' && area.domain !== domainFilter) return false;
       if (universeSearch.trim()) {
         const q = universeSearch.toLowerCase();
@@ -282,11 +382,44 @@ export default function App() {
       }
       return true;
     });
-  }, [auditAreas, domainFilter, universeSearch]);
+  }, [activeAuditAreas, domainFilter, universeSearch]);
 
-  const handleImportAreas = async (inputs: StarterAuditAreaInput[]) => {
-    if (!userProfile || !canWrite) return;
-    const ids = await createAuditAreasBatch(userProfile.userId, inputs);
+  const handleImportAreas = async (
+    inputs: StarterAuditAreaInput[],
+    meta?: UploadImportMeta
+  ) => {
+    if (!userProfile || !canWrite || inputs.length === 0) return;
+    const datasetId = `imp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const ids = await createAuditAreasBatch(userProfile.userId, inputs, datasetId);
+    const datasetName =
+      meta?.datasetName ||
+      (inputs.length === 1
+        ? `${inputs[0].areaCode} - ${inputs[0].name}`
+        : `Audit Universe Import (${inputs.length} Areas)`);
+
+    await createAuditImportRecord({
+      id: datasetId,
+      ownerId: userProfile.userId,
+      datasetName,
+      uploadedByUserId: userProfile.userId,
+      uploadedByName: userProfile.fullName,
+      uploadedByUsername: userProfile.username,
+      sourceType: meta?.sourceType || 'file',
+      records: inputs,
+      createdAreaIds: ids,
+    });
+
+    await createAuditLogEntry({
+      userId: userProfile.userId,
+      userName: userProfile.fullName,
+      username: userProfile.username,
+      action: 'Upload Audit Universe',
+      areaId: ids[0] || '',
+      areaCode: inputs.length === 1 ? inputs[0].areaCode : `BATCH (${inputs.length})`,
+      areaName: datasetName,
+      details: `Uploaded ${inputs.length} Audit Universe record(s) via ${meta?.sourceType || 'file'}.`,
+    });
+
     if (ids[0]) {
       setSelectedAreaId(ids[0]);
       setActiveTab('Overview');
@@ -295,14 +428,148 @@ export default function App() {
 
   const handleLoadStarterEverything = async () => {
     if (!userProfile || !canWrite) return;
-    const ids = await createAuditAreasBatch(userProfile.userId, STARTER_PH_AUDIT_UNIVERSE);
+    await handleImportAreas(STARTER_PH_AUDIT_UNIVERSE, {
+      datasetName: 'Philippine Corporate Starter Universe (9 Areas)',
+      sourceType: 'starter',
+    });
     if (knowledgeItems.length === 0) {
       await createKnowledgeItemsBatch(userProfile.userId, STARTER_PH_KNOWLEDGE_ITEMS);
     }
-    if (ids[0]) {
-      setSelectedAreaId(ids[0]);
-      setActiveTab('Overview');
+  };
+
+  const handleSaveAreaEdit = async (
+    areaId: string,
+    updates: UpdateAuditAreaMetadataInput
+  ) => {
+    if (!userProfile || !isAdmin) return;
+    await updateAuditAreaMetadata(areaId, updates);
+    await createAuditLogEntry({
+      userId: userProfile.userId,
+      userName: userProfile.fullName,
+      username: userProfile.username,
+      action: 'Edit Audit Universe',
+      areaId,
+      areaCode: updates.areaCode,
+      areaName: updates.name,
+      details: `Updated domain (${updates.domain}), entity (${updates.entityName}), and risk tier (${updates.inherentRiskTier}).`,
+    });
+  };
+
+  const handleDuplicateArea = async (area: AuditArea) => {
+    if (!userProfile || !isAdmin) return;
+    const created = await duplicateAuditArea(
+      userProfile.userId,
+      area,
+      auditAreas.map((a) => a.areaCode)
+    );
+    await createAuditLogEntry({
+      userId: userProfile.userId,
+      userName: userProfile.fullName,
+      username: userProfile.username,
+      action: 'Duplicate Audit Universe',
+      areaId: created.id,
+      areaCode: created.areaCode,
+      areaName: created.name,
+      details: `Duplicated from [${area.areaCode}] ${area.name}.`,
+    });
+    setSelectedAreaId(created.id);
+  };
+
+  const handleArchiveAreas = async (areas: AuditArea[]) => {
+    if (!userProfile || !isAdmin || areas.length === 0) return;
+    const ids = areas.map((a) => a.id);
+    await bulkSetAuditAreaStatus(ids, 'Archived');
+    setSidebarSelectedIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+    await createAuditLogEntry({
+      userId: userProfile.userId,
+      userName: userProfile.fullName,
+      username: userProfile.username,
+      action: 'Archive Audit Universe',
+      areaId: areas.length === 1 ? areas[0].id : '',
+      areaCode: areas.length === 1 ? areas[0].areaCode : `BULK (${areas.length})`,
+      areaName:
+        areas.length === 1
+          ? areas[0].name
+          : areas.map((a) => a.areaCode).join(', '),
+      details: `Archived ${areas.length} Audit Universe record(s); linked Process Docs, Risks, Controls, Findings, Recommendations, and Reports preserved.`,
+    });
+  };
+
+  const handleRestoreAreas = async (areas: AuditArea[]) => {
+    if (!userProfile || !isAdmin || areas.length === 0) return;
+    const ids = areas.map((a) => a.id);
+    await bulkSetAuditAreaStatus(ids, 'Active');
+    await createAuditLogEntry({
+      userId: userProfile.userId,
+      userName: userProfile.fullName,
+      username: userProfile.username,
+      action: 'Restore Audit Universe',
+      areaId: areas.length === 1 ? areas[0].id : '',
+      areaCode: areas.length === 1 ? areas[0].areaCode : `BULK (${areas.length})`,
+      areaName:
+        areas.length === 1
+          ? areas[0].name
+          : areas.map((a) => a.areaCode).join(', '),
+      details: `Restored ${areas.length} archived Audit Universe record(s) to Active status.`,
+    });
+    if (areas[0]) setSelectedAreaId(areas[0].id);
+  };
+
+  const handleConfirmPermanentDelete = async (areas: AuditArea[]) => {
+    if (!userProfile || !isAdmin || areas.length === 0) return;
+    const ids = areas.map((a) => a.id);
+    await bulkDeleteAuditAreasCascade(ids);
+    setSidebarSelectedIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+    await createAuditLogEntry({
+      userId: userProfile.userId,
+      userName: userProfile.fullName,
+      username: userProfile.username,
+      action: 'Delete Audit Universe',
+      areaId: '',
+      areaCode: areas.length === 1 ? areas[0].areaCode : `BULK (${areas.length})`,
+      areaName:
+        areas.length === 1
+          ? areas[0].name
+          : areas.map((a) => a.areaCode).join(', '),
+      details: `Permanently deleted ${areas.length} Audit Universe record(s) and all linked Process Docs, Findings, Knowledge items, and Report Drafts.`,
+    });
+  };
+
+  const handleReimportDataset = async (record: AuditImportRecord) => {
+    if (!userProfile || !isAdmin || record.records.length === 0) return;
+    await handleImportAreas(record.records, {
+      datasetName: `Re-import: ${record.datasetName}`,
+      sourceType: 'reimport',
+    });
+  };
+
+  const handleToggleImportArchive = async (record: AuditImportRecord) => {
+    if (!userProfile || !isAdmin) return;
+    const nextStatus = record.status === 'Archived' ? 'Active' : 'Archived';
+    await updateAuditImportStatus(record.id, nextStatus);
+    const linkedAreas = auditAreas.filter(
+      (a) => a.datasetId === record.id || record.createdAreaIds.includes(a.id)
+    );
+    if (linkedAreas.length > 0) {
+      if (nextStatus === 'Archived') {
+        await handleArchiveAreas(linkedAreas.filter((a) => a.status !== 'Archived'));
+      } else {
+        await handleRestoreAreas(linkedAreas.filter((a) => a.status === 'Archived'));
+      }
     }
+  };
+
+  const handleDeleteImportRecord = async (record: AuditImportRecord) => {
+    if (!userProfile || !isAdmin) return;
+    await deleteAuditImportRecord(record.id);
   };
 
   const handleUpdateIntelligence = async (updated: AuditAreaIntelligence) => {
@@ -322,6 +589,80 @@ export default function App() {
       tags: [obs.domain, obs.riskRating],
       sourceAreaId: obs.areaId,
     });
+  };
+
+  const handleUpdateProcessAndSync = useCallback(
+    async (processId: string, input: Partial<ProcessDocumentationInput>) => {
+      await updateProcessDocumentation(processId, input);
+      const targetArea =
+        auditAreas.find((a) => a.id === input.linkedAreaId) || selectedArea || null;
+      if (targetArea) {
+        const cleanInput = sanitizeProcessDocumentationInput({
+          ...input,
+          linkedAreaId: targetArea.id,
+          linkedAreaName: targetArea.name,
+        });
+        const syncedIntel = syncProcessDocToAreaIntelligence(targetArea, cleanInput);
+        await saveAuditAreaIntelligence(targetArea.id, syncedIntel, syncedIntel.riskRating);
+      }
+    },
+    [auditAreas, selectedArea]
+  );
+
+  const handleNavigateToModule = useCallback((areaId: string, tab: WorkspaceTab) => {
+    setSelectedAreaId(areaId);
+    setActiveTab(tab);
+    setWorkspaceMode('audit_areas');
+  }, []);
+
+  const handleRunProcessAiAction = async (
+    processDoc: ProcessDocumentation,
+    actionType: ProcessAiActionType
+  ): Promise<string> => {
+    if (!userProfile || !canWrite) {
+      throw new Error('Only Administrators and Auditors can run AI generation.');
+    }
+    const linkedArea =
+      auditAreas.find((a) => a.id === processDoc.linkedAreaId) || auditAreas[0] || null;
+    if (!linkedArea) {
+      throw new Error(
+        'Please create or link an Audit Universe area before running AI generation.'
+      );
+    }
+
+    const generated = await generateFromProcessDocumentation({
+      actionType,
+      processDoc,
+      linkedArea,
+      knowledgeItems,
+    });
+
+    const baseIntel =
+      linkedArea.intelligence ||
+      sanitizeIntelligence({
+        auditObjective: processDoc.processObjective,
+        processDescription: processDoc.processFlowNarrative || processDoc.scope,
+        riskRating: linkedArea.inherentRiskTier,
+      } as AuditAreaIntelligence);
+
+    const merged = sanitizeIntelligence({
+      ...baseIntel,
+      ...generated,
+      generatedAt: new Date().toISOString(),
+    });
+
+    await saveAuditAreaIntelligence(linkedArea.id, merged, merged.riskRating);
+
+    const labels: Record<ProcessAiActionType, string> = {
+      risk_assessment: 'Risk Assessment',
+      control_matrix: 'Control Matrix',
+      audit_procedures: 'Audit Procedures',
+      walkthrough_questions: 'Walkthrough Questions',
+      potential_findings: 'Potential Findings & Root Cause',
+      recommendations: 'Recommendations',
+    };
+
+    return `${labels[actionType]} generated from ${processDoc.processCode} and synced to [${linkedArea.areaCode}] ${linkedArea.name}.`;
   };
 
   if (!startupReady) {
@@ -370,6 +711,7 @@ export default function App() {
           href="#top"
           onClick={(e) => {
             e.preventDefault();
+            setWorkspaceMode('audit_areas');
             setActiveTab('Overview');
           }}
           className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 font-display"
@@ -379,18 +721,30 @@ export default function App() {
 
         {/* Zone 2: Concise single-line navigation links */}
         <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600">
-          {canWrite && (
-            <button
-              type="button"
-              onClick={() => setShowUploadModal(true)}
-              className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
-            >
-              Audit Universe
-            </button>
-          )}
           <button
             type="button"
-            onClick={() => setActiveTab('Findings Library')}
+            onClick={() => setWorkspaceMode('audit_areas')}
+            className={`hover:text-slate-900 underline-offset-4 transition-colors whitespace-nowrap shrink-0 ${
+              workspaceMode === 'audit_areas' ? 'text-blue-900 font-semibold underline' : 'hover:underline'
+            }`}
+          >
+            Audit Universe
+          </button>
+          <button
+            type="button"
+            onClick={() => setWorkspaceMode('process_docs')}
+            className={`hover:text-slate-900 underline-offset-4 transition-colors whitespace-nowrap shrink-0 ${
+              workspaceMode === 'process_docs' ? 'text-blue-900 font-semibold underline' : 'hover:underline'
+            }`}
+          >
+            Process Docs
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setWorkspaceMode('audit_areas');
+              setActiveTab('Findings Library');
+            }}
             className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
           >
             Observation Engine
@@ -444,26 +798,169 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Workspace Layout: Left Sidebar + Right Viewport */}
+      {/* Mobile Navigation Bar */}
+      <div className="md:hidden bg-white border-b border-slate-200 px-4 py-2 flex items-center gap-2 overflow-x-auto no-print">
+        <button
+          type="button"
+          onClick={() => setWorkspaceMode('audit_areas')}
+          className={`px-3 py-1.5 text-xs font-medium rounded-md whitespace-nowrap shrink-0 ${
+            workspaceMode === 'audit_areas'
+              ? 'bg-blue-900 text-white'
+              : 'bg-slate-100 text-slate-700'
+          }`}
+        >
+          Audit Universe
+        </button>
+        <button
+          type="button"
+          onClick={() => setWorkspaceMode('process_docs')}
+          className={`px-3 py-1.5 text-xs font-medium rounded-md whitespace-nowrap shrink-0 ${
+            workspaceMode === 'process_docs'
+              ? 'bg-blue-900 text-white'
+              : 'bg-slate-100 text-slate-700'
+          }`}
+        >
+          Process Docs ({processDocs.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowKnowledgeModal(true)}
+          className="px-3 py-1.5 text-xs font-medium rounded-md bg-slate-100 text-slate-700 whitespace-nowrap shrink-0"
+        >
+          Knowledge Base
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowAssistantDrawer(true)}
+          className="px-3 py-1.5 text-xs font-medium rounded-md bg-slate-100 text-slate-700 whitespace-nowrap shrink-0"
+        >
+          Audit GPT
+        </button>
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={() => setShowUsersModal(true)}
+            className="px-3 py-1.5 text-xs font-medium rounded-md bg-slate-100 text-slate-700 whitespace-nowrap shrink-0"
+          >
+            Users ({orgUsers.length})
+          </button>
+        )}
+      </div>
+
+      {/* Main Workspace Layout */}
+      {workspaceMode === 'process_docs' ? (
+        <ProcessDocumentationView
+          processDocs={processDocs}
+          auditAreas={activeAuditAreas}
+          selectedAreaId={selectedAreaId}
+          onSelectArea={setSelectedAreaId}
+          observations={observations}
+          canWrite={canWrite}
+          isAdmin={isAdmin}
+          currentUserId={userProfile.userId}
+          onCreateProcess={async (input) =>
+            createProcessDocumentation(userProfile.userId, input)
+          }
+          onUpdateProcess={handleUpdateProcessAndSync}
+          onDeleteProcess={deleteProcessDocumentation}
+          onNavigateToModule={handleNavigateToModule}
+          onRunAiAction={handleRunProcessAiAction}
+        />
+      ) : (
       <div className="flex-1 flex flex-col lg:flex-row min-h-0">
         {/* Left Sidebar: Audit Universe Explorer */}
         <aside className="w-full lg:w-72 bg-white border-b lg:border-b-0 lg:border-r border-slate-200 flex flex-col shrink-0 no-print">
           <div className="p-4 border-b border-slate-200 space-y-3">
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-xs font-semibold text-slate-900 tracking-wide">
-                Audit Universe ({auditAreas.length})
+                Audit Universe ({activeAuditAreas.length})
               </h2>
-              {canWrite && (
-                <button
-                  type="button"
-                  onClick={() => setShowUploadModal(true)}
-                  className="inline-flex items-center gap-1 text-xs font-medium text-blue-900 hover:text-blue-700 whitespace-nowrap shrink-0"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  Add / Import
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {isAdmin && activeAuditAreas.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSidebarSelectMode((prev) => !prev);
+                      setSidebarSelectedIds(new Set());
+                    }}
+                    className={`text-[11px] font-medium px-2 py-0.5 rounded border transition-colors ${
+                      sidebarSelectMode
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {sidebarSelectMode ? 'Done' : 'Select'}
+                  </button>
+                )}
+                {canWrite && (
+                  <button
+                    type="button"
+                    onClick={() => setShowUploadModal(true)}
+                    className="inline-flex items-center gap-1 text-xs font-medium text-blue-900 hover:text-blue-700 whitespace-nowrap shrink-0"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Add / Import
+                  </button>
+                )}
+              </div>
             </div>
+
+            {isAdmin && sidebarSelectMode && (
+              <div className="p-2 bg-slate-900 text-white rounded-md space-y-2 text-[11px]">
+                <div className="flex items-center justify-between">
+                  <span>{sidebarSelectedIds.size} selected</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (
+                        filteredAreas.length > 0 &&
+                        filteredAreas.every((a) => sidebarSelectedIds.has(a.id))
+                      ) {
+                        setSidebarSelectedIds(new Set());
+                      } else {
+                        setSidebarSelectedIds(new Set(filteredAreas.map((a) => a.id)));
+                      }
+                    }}
+                    className="text-blue-200 hover:underline"
+                  >
+                    {filteredAreas.length > 0 &&
+                    filteredAreas.every((a) => sidebarSelectedIds.has(a.id))
+                      ? 'Clear All'
+                      : 'Select All'}
+                  </button>
+                </div>
+                {sidebarSelectedIds.size > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targets = activeAuditAreas.filter((a) =>
+                          sidebarSelectedIds.has(a.id)
+                        );
+                        void handleArchiveAreas(targets);
+                      }}
+                      className="flex-1 inline-flex items-center justify-center gap-1 py-1 bg-slate-700 hover:bg-slate-600 rounded font-medium"
+                    >
+                      <Archive className="w-3 h-3" />
+                      Archive
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targets = activeAuditAreas.filter((a) =>
+                          sidebarSelectedIds.has(a.id)
+                        );
+                        setPendingDeleteAreas(targets);
+                      }}
+                      className="flex-1 inline-flex items-center justify-center gap-1 py-1 bg-red-600 hover:bg-red-700 rounded font-medium"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
@@ -491,7 +988,7 @@ export default function App() {
           </div>
 
           <div className="flex-1 overflow-y-auto divide-y divide-slate-100 max-h-72 lg:max-h-none">
-            {dataLoading && auditAreas.length === 0 ? (
+            {dataLoading && activeAuditAreas.length === 0 ? (
               <div className="p-4 space-y-3">
                 {[1, 2, 3].map((n) => (
                   <div key={n} className="h-14 bg-slate-100 rounded animate-pulse" />
@@ -499,7 +996,7 @@ export default function App() {
               </div>
             ) : filteredAreas.length === 0 ? (
               <div className="p-5 text-xs text-slate-500 space-y-2">
-                <p>No audit areas found in your universe.</p>
+                <p>No active audit areas found in your universe.</p>
                 {canWrite && (
                   <button
                     type="button"
@@ -513,35 +1010,81 @@ export default function App() {
             ) : (
               filteredAreas.map((area) => {
                 const isSelected = area.id === selectedAreaId;
+                const isChecked = sidebarSelectedIds.has(area.id);
                 const isGen = generatingAreaId === area.id;
-                const canDeleteArea = isAdmin || (canWrite && area.ownerId === userProfile.userId);
                 return (
                   <div
                     key={area.id}
                     className={`group px-4 py-3 cursor-pointer transition-colors ${
                       isSelected ? 'bg-slate-100/90' : 'hover:bg-slate-50'
                     }`}
-                    onClick={() => setSelectedAreaId(area.id)}
+                    onClick={() => {
+                      if (sidebarSelectMode && isAdmin) {
+                        setSidebarSelectedIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(area.id)) next.delete(area.id);
+                          else next.add(area.id);
+                          return next;
+                        });
+                      } else {
+                        setSelectedAreaId(area.id);
+                      }
+                    }}
                   >
                     <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                      <span className="font-mono tabular-nums font-medium text-slate-700">
-                        {area.areaCode}
-                      </span>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        {sidebarSelectMode && isAdmin && (
+                          <span className="shrink-0">
+                            {isChecked ? (
+                              <CheckSquare className="w-3.5 h-3.5 text-blue-900" />
+                            ) : (
+                              <Square className="w-3.5 h-3.5 text-slate-400" />
+                            )}
+                          </span>
+                        )}
+                        <span className="font-mono tabular-nums font-medium text-slate-700">
+                          {area.areaCode}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
                         {isGen && <Loader2 className="w-3 h-3 animate-spin text-blue-900" />}
                         <span className="font-medium text-slate-700">{area.inherentRiskTier}</span>
-                        {canDeleteArea && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void deleteAuditArea(area.id);
-                            }}
-                            className="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-red-600 transition-opacity"
-                            title="Delete audit area"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
+                        {isAdmin && !sidebarSelectMode && (
+                          <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingArea(area);
+                              }}
+                              className="p-0.5 text-slate-400 hover:text-blue-900"
+                              title="Edit audit area"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleArchiveAreas([area]);
+                              }}
+                              className="p-0.5 text-slate-400 hover:text-amber-700"
+                              title="Archive audit area"
+                            >
+                              <Archive className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPendingDeleteAreas([area]);
+                              }}
+                              className="p-0.5 text-slate-400 hover:text-red-600"
+                              title="Delete audit area"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -586,19 +1129,58 @@ export default function App() {
             </div>
 
             {isAdmin && (
-              <button
-                type="button"
-                onClick={() => setShowUsersModal(true)}
-                className="hidden md:flex w-full items-center justify-between px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-md hover:bg-slate-100 transition-colors"
-              >
-                <span className="inline-flex items-center gap-1.5">
-                  <Users className="w-3.5 h-3.5 text-blue-900" />
-                  Users Module
+              <div className="space-y-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUniverseMgmtTab('active');
+                    setShowUniverseMgmtModal(true);
+                  }}
+                  className="flex w-full items-center justify-between px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-md hover:bg-slate-100 transition-colors"
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <SlidersHorizontal className="w-3.5 h-3.5 text-blue-900" />
+                    Universe Maintenance
+                  </span>
+                  <span className="font-mono tabular-nums text-[11px] text-slate-500">
+                    {archivedAuditAreas.length > 0
+                      ? `${archivedAuditAreas.length} arch`
+                      : `${importHistory.length} imp`}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowUsersModal(true)}
+                  className="hidden md:flex w-full items-center justify-between px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-md hover:bg-slate-100 transition-colors"
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <Users className="w-3.5 h-3.5 text-blue-900" />
+                    Users Module
+                  </span>
+                  <span className="font-mono tabular-nums text-[11px] text-slate-500">
+                    {orgUsers.length}
+                  </span>
+                </button>
+              </div>
+            )}
+
+            {syncMeta && (
+              <div className="flex items-center justify-between text-[11px] text-slate-500">
+                <span>
+                  {syncMeta.fromCache
+                    ? 'Offline Cache Mode'
+                    : syncMeta.hasPendingWrites
+                    ? 'Syncing Changes...'
+                    : 'Firestore Connected'}
                 </span>
-                <span className="font-mono tabular-nums text-[11px] text-slate-500">
-                  {orgUsers.length}
+                <span className="font-mono tabular-nums">
+                  {syncMeta.syncedAt.toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                  })}
                 </span>
-              </button>
+              </div>
             )}
 
             <div className="flex items-center justify-between gap-2">
@@ -624,7 +1206,7 @@ export default function App() {
 
         {/* Main Content Viewport */}
         <main className="flex-1 min-w-0 flex flex-col">
-          {auditAreas.length === 0 && !dataLoading ? (
+          {activeAuditAreas.length === 0 && !dataLoading ? (
             <div className="flex-1 flex items-center justify-center p-8">
               <div className="max-w-2xl w-full bg-white border border-slate-200 rounded-lg p-8 space-y-6">
                 <div className="space-y-2">
@@ -700,6 +1282,46 @@ export default function App() {
                           selectedArea.intelligence?.riskRating || selectedArea.inherentRiskTier
                         }
                       />
+                      {isAdmin && (
+                        <div className="flex items-center gap-1 border border-slate-200 rounded-md bg-slate-50/70 p-0.5">
+                          <button
+                            type="button"
+                            onClick={() => setEditingArea(selectedArea)}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-white rounded"
+                            title="Edit Audit Universe"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDuplicateArea(selectedArea)}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-white rounded"
+                            title="Duplicate Audit Universe"
+                          >
+                            <Copy className="w-3 h-3" />
+                            Duplicate
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleArchiveAreas([selectedArea])}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-50 rounded"
+                            title="Archive Audit Universe (preserve linked records)"
+                          >
+                            <Archive className="w-3 h-3" />
+                            Archive
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPendingDeleteAreas([selectedArea])}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-red-700 hover:bg-red-50 rounded"
+                            title="Delete Audit Universe Permanently"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            Delete
+                          </button>
+                        </div>
+                      )}
                       {canWrite && (
                         <button
                           type="button"
@@ -890,6 +1512,7 @@ export default function App() {
                   <ReportBuilderTab
                     area={selectedArea}
                     intelligence={selectedArea.intelligence}
+                    processDoc={findProcessDocForArea(selectedArea, processDocs)}
                     observations={observations}
                     savedReports={savedReports}
                     onSaveReport={async (input) => saveAuditReport(userProfile.userId, input)}
@@ -901,6 +1524,7 @@ export default function App() {
           )}
         </main>
       </div>
+      )}
 
       {/* Modals & Drawers */}
       {canWrite && (
@@ -943,6 +1567,49 @@ export default function App() {
           onClose={() => setShowUsersModal(false)}
           users={orgUsers}
           currentAdminUserId={userProfile.userId}
+        />
+      )}
+
+      {isAdmin && (
+        <AuditUniverseManagementModal
+          isOpen={showUniverseMgmtModal}
+          initialTab={universeMgmtTab}
+          onClose={() => setShowUniverseMgmtModal(false)}
+          allAreas={auditAreas}
+          processDocs={processDocs}
+          observations={observations}
+          savedReports={savedReports}
+          importHistory={importHistory}
+          auditLogs={auditLogs}
+          onOpenUpload={() => setShowUploadModal(true)}
+          onEditArea={(area) => setEditingArea(area)}
+          onDuplicateArea={handleDuplicateArea}
+          onArchiveAreas={handleArchiveAreas}
+          onRestoreAreas={handleRestoreAreas}
+          onRequestDeleteAreas={(areas) => setPendingDeleteAreas(areas)}
+          onReimportDataset={handleReimportDataset}
+          onToggleImportArchive={handleToggleImportArchive}
+          onDeleteImportRecord={handleDeleteImportRecord}
+        />
+      )}
+
+      {isAdmin && (
+        <EditAuditAreaModal
+          area={editingArea}
+          onClose={() => setEditingArea(null)}
+          onSave={handleSaveAreaEdit}
+        />
+      )}
+
+      {isAdmin && (
+        <DeleteUniverseConfirmModal
+          targetAreas={pendingDeleteAreas}
+          processDocs={processDocs}
+          observations={observations}
+          savedReports={savedReports}
+          onClose={() => setPendingDeleteAreas([])}
+          onConfirmDelete={handleConfirmPermanentDelete}
+          onArchiveInstead={handleArchiveAreas}
         />
       )}
     </div>
